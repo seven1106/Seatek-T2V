@@ -1,19 +1,76 @@
-import { useState } from 'react'
-import { Loader2, Sparkles, Download, AlertCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2, Sparkles, Download, AlertCircle, DollarSign, Server } from 'lucide-react'
 import axios from 'axios'
-import type { TaskStatus } from '../types'
+import type { TaskStatus, ServerConfig, VideoModel, ServerType } from '../types'
 
 function TextToVideo() {
+  const [servers, setServers] = useState<ServerConfig[]>([])
+  const [selectedServer, setSelectedServer] = useState<ServerType>('runway')
+  const [availableModels, setAvailableModels] = useState<VideoModel[]>([])
+  const [selectedModel, setSelectedModel] = useState<VideoModel | null>(null)
+  
   const [promptText, setPromptText] = useState('')
-  const [ratio, setRatio] = useState<'1280:720' | '720:1280' | '1104:832' | '832:1104' | '960:960' | '1584:672'>('1280:720')
-  const [duration, setDuration] = useState<4 | 8>(4)
+  const [ratio, setRatio] = useState('')
+  const [duration, setDuration] = useState(4)
   const [loading, setLoading] = useState(false)
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Load servers on mount
+  useEffect(() => {
+    loadServers()
+  }, [])
+
+  // Load models when server changes
+  useEffect(() => {
+    if (selectedServer) {
+      loadModels(selectedServer)
+    }
+  }, [selectedServer])
+
+  // Update ratio and duration when model changes
+  useEffect(() => {
+    if (selectedModel) {
+      setRatio(selectedModel.supportedRatios[0] || '')
+      setDuration(selectedModel.supportedDurations?.[0] || 4)
+    }
+  }, [selectedModel])
+
+  const loadServers = async () => {
+    try {
+      const response = await axios.get<ServerConfig[]>('http://localhost:3001/api/servers')
+      setServers(response.data)
+    } catch (err) {
+      console.error('Failed to load servers:', err)
+    }
+  }
+
+  const loadModels = async (serverId: ServerType) => {
+    try {
+      const response = await axios.get<VideoModel[]>(
+        `http://localhost:3001/api/servers/${serverId}/models?type=text-to-video`
+      )
+      setAvailableModels(response.data)
+      if (response.data.length > 0) {
+        setSelectedModel(response.data[0])
+      }
+    } catch (err) {
+      console.error('Failed to load models:', err)
+    }
+  }
+
+  const estimatedCost = selectedModel && selectedModel.costPerSecond 
+    ? (selectedModel.costPerSecond * duration).toFixed(4)
+    : '0.00'
+
   const handleGenerate = async () => {
     if (!promptText.trim()) {
       setError('Please enter a prompt')
+      return
+    }
+
+    if (!selectedModel) {
+      setError('Please select a model')
       return
     }
 
@@ -23,8 +80,9 @@ function TextToVideo() {
 
     try {
       const response = await axios.post<TaskStatus>('http://localhost:3001/api/text-to-video', {
+        server: selectedServer,
         promptText,
-        model: 'veo3.1',
+        model: selectedModel.id,
         ratio,
         duration,
       })
@@ -62,6 +120,55 @@ function TextToVideo() {
   return (
     <div className="bg-white rounded-2xl shadow-xl p-8">
       <div className="space-y-6">
+        {/* Server Selection */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            <Server className="w-4 h-4 inline mr-1" />
+            Select Server
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            {servers.map((server) => (
+              <button
+                key={server.id}
+                onClick={() => setSelectedServer(server.id)}
+                className={`p-4 rounded-xl border-2 transition-all ${
+                  selectedServer === server.id
+                    ? 'border-purple-500 bg-purple-50 shadow-md'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="font-semibold text-gray-800">{server.name}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {server.models.filter(m => m.type === 'text-to-video' || m.type === 'both').length} models
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Model Selection */}
+        {availableModels.length > 0 && (
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Model
+            </label>
+            <select
+              value={selectedModel?.id || ''}
+              onChange={(e) => {
+                const model = availableModels.find(m => m.id === e.target.value)
+                setSelectedModel(model || null)
+              }}
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none transition-colors"
+            >
+              {availableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} {model.costPerSecond ? `($${model.costPerSecond}/sec)` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Prompt Input */}
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -77,44 +184,62 @@ function TextToVideo() {
         </div>
 
         {/* Settings */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Aspect Ratio
-            </label>
-            <select
-              value={ratio}
-              onChange={(e) => setRatio(e.target.value as any)}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none transition-colors"
-            >
-              <option value="1280:720">16:9 Landscape (1280:720)</option>
-              <option value="720:1280">9:16 Portrait (720:1280)</option>
-              <option value="1104:832">4:3 Landscape (1104:832)</option>
-              <option value="832:1104">3:4 Portrait (832:1104)</option>
-              <option value="960:960">1:1 Square (960:960)</option>
-              <option value="1584:672">21:9 Ultrawide (1584:672)</option>
-            </select>
-          </div>
+        {selectedModel && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Aspect Ratio
+              </label>
+              <select
+                value={ratio}
+                onChange={(e) => setRatio(e.target.value)}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none transition-colors"
+              >
+                {selectedModel.supportedRatios.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
 
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Duration
-            </label>
-            <select
-              value={duration}
-              onChange={(e) => setDuration(Number(e.target.value) as any)}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none transition-colors"
-            >
-              <option value={4}>4 seconds</option>
-              <option value={8}>8 seconds</option>
-            </select>
+            {selectedModel.supportedDurations && selectedModel.supportedDurations.length > 0 && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Duration
+                </label>
+                <select
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none transition-colors"
+                >
+                  {selectedModel.supportedDurations.map((d) => (
+                    <option key={d} value={d}>{d} seconds</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
-        </div>
+        )}
+
+        {/* Estimated Cost */}
+        {selectedModel && selectedModel.costPerSecond && (
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-green-600" />
+                <span className="font-semibold text-gray-700">Estimated Cost:</span>
+              </div>
+              <span className="text-2xl font-bold text-green-600">${estimatedCost}</span>
+            </div>
+            <div className="text-xs text-gray-600 mt-2">
+              {duration} seconds × ${selectedModel.costPerSecond}/sec
+            </div>
+          </div>
+        )}
 
         {/* Generate Button */}
         <button
           onClick={handleGenerate}
-          disabled={loading || !promptText.trim()}
+          disabled={loading || !promptText.trim() || !selectedModel}
           className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold py-4 px-6 rounded-xl hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-2 shadow-lg hover:shadow-xl"
         >
           {loading ? (
@@ -164,6 +289,22 @@ function TextToVideo() {
                     style={{ width: `${taskStatus.progress * 100}%` }}
                   />
                 </div>
+              </div>
+            )}
+
+            {/* Cost Display */}
+            {taskStatus.cost !== undefined && (
+              <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-700">💰 Total Cost:</span>
+                  <span className="text-2xl font-bold text-green-600">${taskStatus.cost.toFixed(4)}</span>
+                </div>
+                {taskStatus.costBreakdown && (
+                  <div className="text-xs text-gray-600 space-y-1">
+                    <div>Model: {taskStatus.costBreakdown.model}</div>
+                    <div>Duration: {taskStatus.costBreakdown.duration}s × ${taskStatus.costBreakdown.pricePerSecond.toFixed(4)}/s</div>
+                  </div>
+                )}
               </div>
             )}
 

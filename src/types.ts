@@ -1,14 +1,29 @@
+export type ServerType = 'runway' | 'runware'
+
+export interface VideoModel {
+  id: string
+  name: string
+  server: ServerType
+  type: 'text-to-video' | 'image-to-video' | 'both'
+  supportedRatios: string[]
+  supportedDurations?: number[]
+  costPerSecond?: number
+}
+
 export interface TextToVideoRequest {
+  server: ServerType
   promptText: string
-  model: 'veo3.1'
-  ratio: '1280:720' | '720:1280' | '1104:832' | '832:1104' | '960:960' | '1584:672'
-  duration: 4 | 8
+  model: string
+  ratio: string
+  duration: number
 }
 
 export interface ImageToVideoRequest {
+  server: ServerType
   promptImage: string
-  model: 'gen4_turbo'
-  ratio: '1280:720' | '720:1280' | '1104:832' | '832:1104' | '960:960' | '1584:672'
+  model: string
+  ratio: string
+  duration?: number
 }
 
 export interface TaskStatus {
@@ -17,4 +32,17 @@ export interface TaskStatus {
   progress?: number
   output?: string[]
   error?: string
+  cost?: number
+  costBreakdown?: {
+    model: string
+    duration: number
+    pricePerSecond: number
+    total: number
+  }
+}
+
+export interface ServerConfig {
+  id: ServerType
+  name: string
+  models: VideoModel[]
 }
