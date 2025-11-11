@@ -21,24 +21,31 @@ export interface TextToVideoRequest {
 export interface ImageToVideoRequest {
   server: ServerType
   promptImage: string
+  promptText?: string
   model: string
   ratio: string
   duration?: number
 }
 
+export interface TaskCostBreakdown {
+  model: string
+  duration: number
+  pricePerSecond: number
+  total: number
+}
+
 export interface TaskStatus {
   id: string
+  server: ServerType
   status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  model?: string
+  duration?: number
   progress?: number
   output?: string[]
   error?: string
+  estimatedCost?: number
   cost?: number
-  costBreakdown?: {
-    model: string
-    duration: number
-    pricePerSecond: number
-    total: number
-  }
+  costBreakdown?: TaskCostBreakdown
 }
 
 export interface ServerConfig {

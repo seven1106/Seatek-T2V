@@ -8,35 +8,44 @@ import {
   DollarSign,
   Server,
 } from "lucide-react";
-import axios from "axios";
 import type {
   TaskStatus,
   ServerConfig,
   VideoModel,
   ServerType,
 } from "../types";
+import { SERVER_CONFIGS, getModelsByServer } from "../config/models";
+import {
+  createImageToVideoTask,
+  refreshTaskStatus,
+} from "../services/videoTasks";
 
 function ImageToVideo() {
-  const [servers, setServers] = useState<ServerConfig[]>([]);
+  const [servers] = useState<ServerConfig[]>(SERVER_CONFIGS);
   const [selectedServer, setSelectedServer] = useState<ServerType>("runway");
   const [availableModels, setAvailableModels] = useState<VideoModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<VideoModel | null>(null);
 
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [promptText, setPromptText] = useState("");
   const [ratio, setRatio] = useState("");
   const [duration, setDuration] = useState(5);
   const [loading, setLoading] = useState(false);
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load servers on mount
   useEffect(() => {
-    loadServers();
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
   }, []);
 
-  // Load models when server changes
   useEffect(() => {
     if (selectedServer) {
       loadModels(selectedServer);
@@ -51,28 +60,11 @@ function ImageToVideo() {
     }
   }, [selectedModel]);
 
-  const loadServers = async () => {
-    try {
-      const response = await axios.get<ServerConfig[]>(
-        "http://localhost:3001/api/servers"
-      );
-      setServers(response.data);
-    } catch (err) {
-      console.error("Failed to load servers:", err);
-    }
-  };
-
-  const loadModels = async (serverId: ServerType) => {
-    try {
-      const response = await axios.get<VideoModel[]>(
-        `http://localhost:3001/api/servers/${serverId}/models?type=image-to-video`
-      );
-      setAvailableModels(response.data);
-      if (response.data.length > 0) {
-        setSelectedModel(response.data[0]);
-      }
-    } catch (err) {
-      console.error("Failed to load models:", err);
+  const loadModels = (serverId: ServerType) => {
+    const models = getModelsByServer(serverId, "image-to-video");
+    setAvailableModels(models);
+    if (models.length > 0) {
+      setSelectedModel(models[0]);
     }
   };
 
@@ -113,67 +105,97 @@ function ImageToVideo() {
       return;
     }
 
+    if (!promptText.trim() && selectedServer === "runware") {
+      setError("Please enter a prompt");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setTaskStatus(null);
+    clearPolling();
 
     try {
-      const formData = new FormData();
-      formData.append("image", selectedImage);
-      formData.append("server", selectedServer);
-      formData.append("model", selectedModel.id);
-      formData.append("ratio", ratio);
-      if (
-        selectedModel.supportedDurations &&
-        selectedModel.supportedDurations.length > 0
-      ) {
-        formData.append("duration", duration.toString());
-      }
+      const imageBase64 = await fileToDataUrl(selectedImage);
 
-      const response = await axios.post<TaskStatus>(
-        "http://localhost:3001/api/image-to-video",
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
+      const task = await createImageToVideoTask({
+        server: selectedServer,
+        imageBase64,
+        modelId: selectedModel.id,
+        ratio,
+        duration,
+        promptText: promptText.trim() || undefined,
+      });
+
+      setTaskStatus(task);
+
+      if (task.server === "runway" && !isFinalStatus(task.status)) {
+        startPolling(task);
+      } else {
+        setLoading(false);
+        if (task.status === "FAILED" && task.error) {
+          setError(task.error);
         }
-      );
-
-      setTaskStatus(response.data);
-      pollTaskStatus(response.data.id);
+      }
     } catch (err: any) {
-      setError(err.response?.data?.error || "Failed to generate video");
+      const message = err?.message || (typeof err === "string" ? err : "Failed to generate video");
+      setError(message);
       setLoading(false);
     }
   };
 
-  const pollTaskStatus = async (taskId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const response = await axios.get<TaskStatus>(
-          `http://localhost:3001/api/task/${taskId}`
-        );
-        setTaskStatus(response.data);
+  const clearPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  };
 
-        if (
-          response.data.status === "SUCCEEDED" ||
-          response.data.status === "FAILED"
-        ) {
-          clearInterval(interval);
+  const startPolling = (initialTask: TaskStatus) => {
+    clearPolling();
+    let currentTask = initialTask;
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updatedTask = await refreshTaskStatus(currentTask);
+        currentTask = updatedTask;
+        setTaskStatus(updatedTask);
+
+        if (isFinalStatus(updatedTask.status)) {
+          clearPolling();
           setLoading(false);
 
-          if (response.data.status === "FAILED") {
-            setError(response.data.error || "Video generation failed");
+          if (updatedTask.status === "FAILED") {
+            setError(updatedTask.error || "Video generation failed");
           }
         }
-      } catch (err: any) {
-        clearInterval(interval);
+      } catch (err) {
+        clearPolling();
         setError("Failed to check task status");
         setLoading(false);
       }
     }, 2000);
   };
+
+  const isFinalStatus = (status: TaskStatus["status"]) =>
+    status === "SUCCEEDED" || status === "FAILED";
+
+  const fileToDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === "string") {
+          resolve(result);
+        } else {
+          reject(new Error("Failed to read file"));
+        }
+      };
+      reader.onerror = () => {
+        reject(new Error("Failed to read file"));
+      };
+      reader.readAsDataURL(file);
+    });
 
   return (
     <div className="bg-white rounded-2xl shadow-xl p-8">
@@ -234,6 +256,20 @@ function ImageToVideo() {
             </select>
           </div>
         )}
+
+        {/* Prompt Input */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-2">
+            Video Prompt (optional for Runway)
+          </label>
+          <textarea
+            value={promptText}
+            onChange={(e) => setPromptText(e.target.value)}
+            placeholder="Describe the motion or scene you want in the video..."
+            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-purple-500 focus:outline-none resize-none transition-colors"
+            rows={3}
+          />
+        </div>
 
         {/* Image Upload */}
         <div>
@@ -392,7 +428,7 @@ function ImageToVideo() {
               </span>
             </div>
 
-            {taskStatus.progress !== undefined && (
+            {taskStatus.progress !== undefined && taskStatus.server === "runway" && (
               <div>
                 <div className="flex justify-between text-sm text-gray-600 mb-2">
                   <span>Progress</span>

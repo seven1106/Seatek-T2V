@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, Sparkles, Download, AlertCircle, DollarSign, Server } from 'lucide-react'
-import axios from 'axios'
 import type { TaskStatus, ServerConfig, VideoModel, ServerType } from '../types'
+import { SERVER_CONFIGS, getModelsByServer } from '../config/models'
+import { createTextToVideoTask, refreshTaskStatus } from '../services/videoTasks'
 
 function TextToVideo() {
-  const [servers, setServers] = useState<ServerConfig[]>([])
+  const [servers] = useState<ServerConfig[]>(SERVER_CONFIGS)
   const [selectedServer, setSelectedServer] = useState<ServerType>('runway')
   const [availableModels, setAvailableModels] = useState<VideoModel[]>([])
   const [selectedModel, setSelectedModel] = useState<VideoModel | null>(null)
@@ -15,10 +16,15 @@ function TextToVideo() {
   const [loading, setLoading] = useState(false)
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Load servers on mount
   useEffect(() => {
-    loadServers()
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
+    }
   }, [])
 
   // Load models when server changes
@@ -36,26 +42,11 @@ function TextToVideo() {
     }
   }, [selectedModel])
 
-  const loadServers = async () => {
-    try {
-      const response = await axios.get<ServerConfig[]>('http://localhost:3001/api/servers')
-      setServers(response.data)
-    } catch (err) {
-      console.error('Failed to load servers:', err)
-    }
-  }
-
-  const loadModels = async (serverId: ServerType) => {
-    try {
-      const response = await axios.get<VideoModel[]>(
-        `http://localhost:3001/api/servers/${serverId}/models?type=text-to-video`
-      )
-      setAvailableModels(response.data)
-      if (response.data.length > 0) {
-        setSelectedModel(response.data[0])
-      }
-    } catch (err) {
-      console.error('Failed to load models:', err)
+  const loadModels = (serverId: ServerType) => {
+    const models = getModelsByServer(serverId, 'text-to-video')
+    setAvailableModels(models)
+    if (models.length > 0) {
+      setSelectedModel(models[0])
     }
   }
 
@@ -77,45 +68,68 @@ function TextToVideo() {
     setLoading(true)
     setError(null)
     setTaskStatus(null)
+    clearPolling()
 
     try {
-      const response = await axios.post<TaskStatus>('http://localhost:3001/api/text-to-video', {
+      const task = await createTextToVideoTask({
         server: selectedServer,
         promptText,
-        model: selectedModel.id,
+        modelId: selectedModel.id,
         ratio,
         duration,
       })
 
-      setTaskStatus(response.data)
-      pollTaskStatus(response.data.id)
+      setTaskStatus(task)
+
+      if (task.server === 'runway' && !isFinalStatus(task.status)) {
+        startPolling(task)
+      } else {
+        setLoading(false)
+        if (task.status === 'FAILED' && task.error) {
+          setError(task.error)
+        }
+      }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to generate video')
+      const message = err?.message || (typeof err === 'string' ? err : 'Failed to generate video')
+      setError(message)
       setLoading(false)
     }
   }
 
-  const pollTaskStatus = async (taskId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const response = await axios.get<TaskStatus>(`http://localhost:3001/api/task/${taskId}`)
-        setTaskStatus(response.data)
+  const clearPolling = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }
 
-        if (response.data.status === 'SUCCEEDED' || response.data.status === 'FAILED') {
-          clearInterval(interval)
+  const startPolling = (initialTask: TaskStatus) => {
+    clearPolling()
+    let currentTask = initialTask
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const updatedTask = await refreshTaskStatus(currentTask)
+        currentTask = updatedTask
+        setTaskStatus(updatedTask)
+
+        if (isFinalStatus(updatedTask.status)) {
+          clearPolling()
           setLoading(false)
-          
-          if (response.data.status === 'FAILED') {
-            setError(response.data.error || 'Video generation failed')
+
+          if (updatedTask.status === 'FAILED') {
+            setError(updatedTask.error || 'Video generation failed')
           }
         }
-      } catch (err: any) {
-        clearInterval(interval)
+      } catch (err) {
+        clearPolling()
         setError('Failed to check task status')
         setLoading(false)
       }
     }, 2000)
   }
+
+  const isFinalStatus = (status: TaskStatus['status']) => status === 'SUCCEEDED' || status === 'FAILED'
 
   return (
     <div className="bg-white rounded-2xl shadow-xl p-8">
@@ -277,7 +291,7 @@ function TextToVideo() {
               </span>
             </div>
 
-            {taskStatus.progress !== undefined && (
+            {taskStatus.progress !== undefined && taskStatus.server === 'runway' && (
               <div>
                 <div className="flex justify-between text-sm text-gray-600 mb-2">
                   <span>Progress</span>

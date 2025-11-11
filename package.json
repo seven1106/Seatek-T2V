@@ -7,22 +7,24 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "server": "node server/index.js"
+    "ionic:build": "npm run build"
   },
   "dependencies": {
-    "@runwayml/sdk": "^3.4.0",
+    "@capacitor/android": "7.4.4",
+    "@capacitor/app": "7.1.0",
+    "@capacitor/core": "7.4.4",
+    "@capacitor/haptics": "7.0.2",
+    "@capacitor/ios": "7.4.4",
+    "@capacitor/keyboard": "7.0.3",
+    "@capacitor/status-bar": "7.0.3",
     "@runware/sdk-js": "latest",
-    "axios": "^1.6.2",
-    "chalk": "^5.6.2",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^4.18.2",
+    "@runwayml/sdk": "^3.4.0",
     "lucide-react": "^0.294.0",
-    "multer": "^1.4.5-lts.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "7.4.4",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",

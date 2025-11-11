@@ -1,0 +1,7 @@
+{
+  "name": "seatek-video",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "custom"
+}
